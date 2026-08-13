@@ -30,7 +30,7 @@ TEMPLATES: dict[str, dict] = {
         "url": "https://www.hdkyl.in",
         "login_path": "/login.php",
         "checkin_path": "/attendance.php",
-        "checkin_type": "auto",  # 改为 auto
+        "checkin_type": "auto",
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
@@ -38,7 +38,7 @@ TEMPLATES: dict[str, dict] = {
         "url": "https://www.hitpt.com",
         "login_path": "/login.php",
         "checkin_path": "/attendance.php",
-        "checkin_type": "turnstile",
+        "checkin_type": "auto",
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
@@ -46,7 +46,7 @@ TEMPLATES: dict[str, dict] = {
         "url": "https://piggo.me",
         "login_path": "/login.php",
         "checkin_path": "/attendance.php",
-        "checkin_type": "auto",  # 改为 auto
+        "checkin_type": "auto",
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
@@ -146,8 +146,8 @@ def wait_past_cf(page, timeout=300) -> bool:
     return False
 
 
-def wait_past_leichi(page, timeout=180) -> bool:
-    """等待雷池WAF验证完成。"""
+def wait_past_leichi(page, timeout=300) -> bool:
+    """等待雷池WAF验证完成，返回是否成功。"""
     print("    [*] 检测到雷池WAF验证，等待自动通过...")
     deadline = time.time() + timeout
     attempt = 0
@@ -155,10 +155,18 @@ def wait_past_leichi(page, timeout=180) -> bool:
         attempt += 1
         try:
             body = page.evaluate("() => document.body ? document.body.innerText : ''")
+            # 检查是否还在雷池验证页面
             if "雷池WAF" not in body and "安全检测能力由雷池WAF驱动" not in body:
                 print(f"    [+] 雷池WAF验证通过 (尝试 {attempt})")
                 return True
-            print(f"    [*] 等待雷池WAF验证... ({attempt})")
+            # 检查是否有签到成功关键词
+            success_keywords = ["已经签到", "已签到", "签到成功", "今日已签到"]
+            for kw in success_keywords:
+                if kw in body:
+                    print(f"    [+] 雷池WAF验证通过，已自动签到 (检测到: {kw})")
+                    return True
+            if attempt % 5 == 0:
+                print(f"    [*] 等待雷池WAF验证... ({attempt})")
         except Exception:
             pass
         time.sleep(3)
@@ -353,18 +361,19 @@ def do_checkin(page, site_config: dict) -> bool:
     site_url = site_config["url"]
     checkin_url = f"{site_url}{site_config['checkin_path']}"
     checkin_type = site_config.get("checkin_type", "turnstile")
+    name = site_config.get("name", "")
 
     print(f"    [*] 访问签到页面 {checkin_url} ...")
     page.goto(checkin_url, wait_until="domcontentloaded", timeout=60000)
-    time.sleep(3)
+    time.sleep(5)  # 等待页面稳定
 
     # 检查是否被雷池WAF拦截
     page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
     if "雷池WAF" in page_text or "安全检测能力由雷池WAF驱动" in page_text:
-        if not wait_past_leichi(page, timeout=180):
+        if not wait_past_leichi(page, timeout=300):
             return False
-        # 雷池通过后，重新获取页面内容
-        time.sleep(2)
+        # 雷池通过后，等待页面跳转/刷新
+        time.sleep(5)
         page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
 
     # 等待 Cloudflare 验证完成
@@ -372,20 +381,65 @@ def do_checkin(page, site_config: dict) -> bool:
         print("    [-] Cloudflare 验证超时")
         return False
 
-    # 再次获取页面内容，检查签到状态
-    time.sleep(3)
-    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    # 等待页面完全加载
+    time.sleep(5)
     
-    # 检查是否已签到（自动签到成功关键词）
+    # 获取页面内容检查签到状态
+    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    print(f"    [DEBUG] 页面内容长度: {len(page_text)}")
+    
+    # 检查是否已签到（签到成功关键词）
     success_keywords = ["已经签到", "已签到", "已經簽到", "已簽到", "签到成功", "簽到成功", "今日已签到", "重复签到", "请勿重复打卡"]
     for kw in success_keywords:
         if kw in page_text:
             print(f"    [OK] 今日已签到 (检测到关键词: {kw})")
             return True
+    
+    # 检查失败关键词
+    fail_keywords = ["验证失败", "验证错误", "请重新验证", "验证码错误", "请先完成验证", "签到失败"]
+    for kw in fail_keywords:
+        if kw in page_text:
+            print(f"    [-] 签到失败: {kw}")
+            return False
 
-    # 如果是 auto 模式（piggo、hdkyl），页面加载成功且没有失败信息即视为成功
+    # 如果是 auto 模式，页面加载成功且没有失败信息，但也没有成功关键词
+    # 尝试等待更长时间，看是否有自动签到
     if checkin_type == "auto":
-        print("    [OK] 签到页面已加载（自动签到模式），签到成功")
+        print("    [*] auto模式，等待自动签到结果...")
+        # 再等待30秒，检测是否有签到成功关键词出现
+        for attempt in range(10):
+            time.sleep(3)
+            page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+            for kw in success_keywords:
+                if kw in page_text:
+                    print(f"    [OK] 自动签到成功 (检测到关键词: {kw})")
+                    return True
+            if attempt % 3 == 0:
+                print(f"    [*] 等待自动签到... ({attempt+1}/10)")
+        
+        # 如果页面包含"签到"链接，尝试点击
+        if "签到" in page_text or "簽到" in page_text:
+            print("    [*] 检测到签到按钮，尝试点击...")
+            clicked = page.evaluate("""() => {
+                for (const a of document.querySelectorAll('a')) {
+                    const t = a.textContent || '';
+                    if (t.includes('签到') || t.includes('簽到')) {
+                        a.click(); 
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            if clicked:
+                time.sleep(5)
+                page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+                for kw in success_keywords:
+                    if kw in page_text:
+                        print(f"    [+] 点击签到成功！(检测到关键词: {kw})")
+                        return True
+        
+        # 如果没有明确的成功或失败，但有页面内容，视为可能成功
+        print("    [WARN] 未检测到明确签到结果，但页面已加载，视为可能成功")
         return True
 
     # 其他签到模式
@@ -544,7 +598,7 @@ def check_logged_in(page, site_config: dict) -> bool:
     # 检查雷池WAF
     page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
     if "雷池WAF" in page_text or "安全检测能力由雷池WAF驱动" in page_text:
-        if not wait_past_leichi(page, timeout=120):
+        if not wait_past_leichi(page, timeout=180):
             return False
 
     if not wait_past_cf(page, timeout=120):
@@ -577,7 +631,7 @@ def process_site(site_config: dict) -> bool:
         print("    [*] 未配置代理，使用直连")
 
     # 自动签到站点列表（使用 Cookie 直接签到，跳过登录检查）
-    auto_sites = ["piggo", "hdkyl"]
+    auto_sites = ["piggo", "hdkyl", "hitpt"]
     extra_args = []
     if name in auto_sites:
         extra_args = [
