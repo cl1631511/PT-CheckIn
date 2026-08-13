@@ -42,7 +42,7 @@ TEMPLATES: dict[str, dict] = {
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
-    "giggo": {
+    "piggo": {
         "url": "https://piggo.me",
         "login_path": "/login.php",
         "checkin_path": "/attendance.php",
