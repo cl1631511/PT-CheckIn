@@ -42,6 +42,14 @@ TEMPLATES: dict[str, dict] = {
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
+    "giggo": {
+        "url": "https://piggo.me",
+        "login_path": "/login.php",
+        "checkin_path": "/attendance.php",
+        "checkin_type": "turnstile",
+        "login_captcha": False,
+        "login_fields": {"username": "username", "password": "password"},
+    },
     "audiences": {
         "url": "https://audiences.me",
         "login_path": "/login.php",
