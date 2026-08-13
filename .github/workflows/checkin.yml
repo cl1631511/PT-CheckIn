@@ -50,6 +50,8 @@ jobs:
           HDKYL_PASSWORD: ${{ secrets.HDKYL_PASSWORD }}
           HITPT_USERNAME: ${{ secrets.HITPT_USERNAME }}
           HITPT_PASSWORD: ${{ secrets.HITPT_PASSWORD }}
+          PIGGO_USERNAME: ${{ secrets.PIGGO_USERNAME }}
+          PIGGO_PASSWORD: ${{ secrets.PIGGO_PASSWORD }}
           AUDIENCES_USERNAME: ${{ secrets.AUDIENCES_USERNAME }}
           AUDIENCES_PASSWORD: ${{ secrets.AUDIENCES_PASSWORD }}
         run: |
