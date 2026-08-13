@@ -30,7 +30,7 @@ TEMPLATES: dict[str, dict] = {
         "url": "https://www.hdkyl.in",
         "login_path": "/login.php",
         "checkin_path": "/attendance.php",
-        "checkin_type": "turnstile",
+        "checkin_type": "auto",  # 改为 auto
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
@@ -46,7 +46,7 @@ TEMPLATES: dict[str, dict] = {
         "url": "https://piggo.me",
         "login_path": "/login.php",
         "checkin_path": "/attendance.php",
-        "checkin_type": "turnstile",
+        "checkin_type": "auto",  # 改为 auto
         "login_captcha": False,
         "login_fields": {"username": "username", "password": "password"},
     },
@@ -143,6 +143,26 @@ def wait_past_cf(page, timeout=300) -> bool:
         except Exception:
             pass
         time.sleep(2)
+    return False
+
+
+def wait_past_leichi(page, timeout=180) -> bool:
+    """等待雷池WAF验证完成。"""
+    print("    [*] 检测到雷池WAF验证，等待自动通过...")
+    deadline = time.time() + timeout
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            body = page.evaluate("() => document.body ? document.body.innerText : ''")
+            if "雷池WAF" not in body and "安全检测能力由雷池WAF驱动" not in body:
+                print(f"    [+] 雷池WAF验证通过 (尝试 {attempt})")
+                return True
+            print(f"    [*] 等待雷池WAF验证... ({attempt})")
+        except Exception:
+            pass
+        time.sleep(3)
+    print("    [!] 雷池WAF验证超时")
     return False
 
 
@@ -273,6 +293,12 @@ def login(page, site_config: dict) -> bool:
     page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
     time.sleep(3)
 
+    # 检查是否被雷池WAF拦截
+    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    if "雷池WAF" in page_text or "安全检测能力由雷池WAF驱动" in page_text:
+        if not wait_past_leichi(page, timeout=180):
+            return False
+
     if not wait_past_cf(page, timeout=180):
         print("    [-] Cloudflare 验证超时")
         return False
@@ -332,16 +358,37 @@ def do_checkin(page, site_config: dict) -> bool:
     page.goto(checkin_url, wait_until="domcontentloaded", timeout=60000)
     time.sleep(3)
 
+    # 检查是否被雷池WAF拦截
+    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    if "雷池WAF" in page_text or "安全检测能力由雷池WAF驱动" in page_text:
+        if not wait_past_leichi(page, timeout=180):
+            return False
+        # 雷池通过后，重新获取页面内容
+        time.sleep(2)
+        page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+
+    # 等待 Cloudflare 验证完成
     if not wait_past_cf(page, timeout=240):
         print("    [-] Cloudflare 验证超时")
         return False
 
+    # 再次获取页面内容，检查签到状态
+    time.sleep(3)
     page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    
+    # 检查是否已签到（自动签到成功关键词）
+    success_keywords = ["已经签到", "已签到", "已經簽到", "已簽到", "签到成功", "簽到成功", "今日已签到", "重复签到", "请勿重复打卡"]
+    for kw in success_keywords:
+        if kw in page_text:
+            print(f"    [OK] 今日已签到 (检测到关键词: {kw})")
+            return True
 
-    if any(k in page_text for k in ["已经签到", "已签到", "已經簽到", "已簽到", "签到成功", "簽到成功"]):
-        print("    [OK] 今日已签到")
+    # 如果是 auto 模式（piggo、hdkyl），页面加载成功且没有失败信息即视为成功
+    if checkin_type == "auto":
+        print("    [OK] 签到页面已加载（自动签到模式），签到成功")
         return True
 
+    # 其他签到模式
     if checkin_type == "turnstile":
         return _checkin_turnstile(page)
     elif checkin_type == "form":
@@ -494,6 +541,12 @@ def check_logged_in(page, site_config: dict) -> bool:
     page.goto(site_url, wait_until="domcontentloaded", timeout=60000)
     time.sleep(3)
 
+    # 检查雷池WAF
+    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    if "雷池WAF" in page_text or "安全检测能力由雷池WAF驱动" in page_text:
+        if not wait_past_leichi(page, timeout=120):
+            return False
+
     if not wait_past_cf(page, timeout=120):
         return False
 
@@ -523,11 +576,20 @@ def process_site(site_config: dict) -> bool:
     else:
         print("    [*] 未配置代理，使用直连")
 
+    # 自动签到站点列表（使用 Cookie 直接签到，跳过登录检查）
+    auto_sites = ["piggo", "hdkyl"]
+    extra_args = []
+    if name in auto_sites:
+        extra_args = [
+            "--disable-blink-features=AutomationControlled",
+        ]
+        print(f"    [*] {name} 特殊模式：启用雷池WAF兼容，使用Cookie直接签到")
+
     context = launch_persistent_context(
         user_data_dir=get_profile_dir(name),
         headless=False,
-        proxy=proxy_url if proxy_url else None,  # 只有配置了才传代理
-        geoip=True if proxy_url else False,      # 只有使用代理时才启用 geoip
+        proxy=proxy_url if proxy_url else None,
+        geoip=True if proxy_url else False,
         locale="zh-CN",
         timezone="Asia/Shanghai",
         humanize=True,
@@ -540,12 +602,25 @@ def process_site(site_config: dict) -> bool:
             "--disable-blink-features=AutomationControlled",
             "--window-size=1920,1080",
             "--start-maximized",
-        ],
+        ] + extra_args,
     )
     page = context.new_page()
 
     try:
         has_cookies = load_cookies(context, name)
+        
+        # 对使用 Cookie 直接签到的站点
+        if name in auto_sites:
+            if has_cookies:
+                print(f"    [*] {name} 使用 Cookies 直接签到...")
+                return do_checkin(page, site_config)
+            else:
+                print(f"    [!] {name} 未找到 Cookies，尝试登录...")
+                if not login(page, site_config):
+                    return False
+                return do_checkin(page, site_config)
+        
+        # 其他站点正常流程
         logged_in = has_cookies and check_logged_in(page, site_config)
 
         if not logged_in:
