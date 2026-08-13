@@ -189,6 +189,33 @@ jobs:
             echo " 未找到 HITPT_COOKIE Secret，跳过"
           fi
 
+      - name: Generate cookies_piggo.json from Secret
+        env:
+          COOKIE_STRING: ${{ secrets.PIGGO_COOKIE }}
+        run: |
+          if [ -n "$COOKIE_STRING" ]; then
+            echo "从 Secret 生成 cookies_piggo.json"
+            python -c "
+          import json
+          cookie_string = '$COOKIE_STRING'
+          cookies = []
+          for item in cookie_string.split(';'):
+              if '=' in item:
+                  name, value = item.strip().split('=', 1)
+                  cookies.append({
+                      'name': name,
+                      'value': value,
+                      'domain': '.piggo.me',
+                      'path': '/'
+                  })
+          with open('cookies_piggo.json', 'w') as f:
+              json.dump(cookies, f, indent=2)
+          print(' cookies_piggo.json 已生成')
+          "
+          else
+            echo " 未找到 PIGGO_COOKIE Secret，跳过"
+          fi       
+
       # 执行签到（使用 xvfb-run 启用虚拟显示，运行有头模式）
       - name: Run check-in
         env:
