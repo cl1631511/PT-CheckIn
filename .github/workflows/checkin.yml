@@ -80,6 +80,14 @@ jobs:
                   'password': '$HITPT_PASSWORD',
                   'enabled': True
               })
+              
+          if '$PIGGO_USERNAME' and '$PIGGO_PASSWORD':
+              sites.append({
+                  'name': 'piggo',
+                  'username': '$PIGGO_USERNAME',
+                  'password': '$PIGGO_PASSWORD',
+                  'enabled': True
+              })
           
           if '$AUDIENCES_USERNAME' and '$AUDIENCES_PASSWORD':
               sites.append({
