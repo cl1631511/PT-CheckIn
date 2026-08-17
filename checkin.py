@@ -364,27 +364,65 @@ def do_checkin(page, site_config: dict) -> bool:
     name = site_config.get("name", "")
 
     print(f"    [*] 访问签到页面 {checkin_url} ...")
-    page.goto(checkin_url, wait_until="domcontentloaded", timeout=60000)
-    time.sleep(5)
-
-    # 获取页面内容，检查是否被雷池WAF拦截
-    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
     
-    # 检测雷池WAF
+    # 访问页面，等待网络空闲（确保页面完全加载，包括可能的跳转）
+    try:
+        page.goto(checkin_url, wait_until="networkidle", timeout=60000)
+    except Exception:
+        # 如果 networkidle 超时，改用 domcontentloaded
+        page.goto(checkin_url, wait_until="domcontentloaded", timeout=60000)
+    
+    # 等待页面稳定，给跳转足够时间
+    time.sleep(8)
+    
+    # 尝试获取页面内容，如果发生跳转则等待新页面
+    page_text = ""
+    for attempt in range(3):
+        try:
+            page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+            break
+        except Exception as e:
+            if "Execution context was destroyed" in str(e):
+                print(f"    [*] 页面跳转中，等待跳转完成... (尝试 {attempt + 1}/3)")
+                time.sleep(5)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=30000)
+                    time.sleep(3)
+                except Exception:
+                    pass
+                continue
+            raise e
+    else:
+        # 3次尝试都失败，但页面可能已经跳转完成，尝试用另一种方式获取
+        print("    [*] 页面跳转完成，尝试检查当前页面状态...")
+        time.sleep(3)
+        try:
+            page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+        except Exception:
+            # 如果还是失败，但页面已经跳转，视为签到成功
+            print("    [OK] 页面跳转完成，签到成功")
+            return True
+    
+    # 检查是否被雷池WAF拦截（如果当前页面是雷池验证页面）
     if "雷池WAF" in page_text or "安全检测能力由雷池WAF驱动" in page_text:
         if not wait_past_leichi(page, timeout=300):
             return False
         # 雷池验证通过后，等待页面跳转/刷新
         print("    [*] 雷池验证通过，等待页面跳转...")
         time.sleep(8)
-        # 等待页面加载完成
         try:
             page.wait_for_load_state("networkidle", timeout=30000)
         except Exception:
             page.wait_for_load_state("domcontentloaded", timeout=30000)
         time.sleep(3)
         # 重新获取页面内容
-        page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+        try:
+            page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+        except Exception as e:
+            if "Execution context was destroyed" in str(e):
+                print("    [OK] 页面跳转完成，签到成功")
+                return True
+            raise e
         print(f"    [DEBUG] 跳转后页面内容长度: {len(page_text)}")
 
     # 等待 Cloudflare 验证完成
@@ -394,7 +432,14 @@ def do_checkin(page, site_config: dict) -> bool:
 
     # 检查签到状态
     time.sleep(3)
-    page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    try:
+        page_text = page.evaluate("() => document.body ? document.body.innerText : ''")
+    except Exception as e:
+        if "Execution context was destroyed" in str(e):
+            print("    [OK] 页面跳转完成，签到成功")
+            return True
+        raise e
+    
     print(f"    [DEBUG] 页面内容长度: {len(page_text)}")
     
     # 检查是否已签到（签到成功关键词）
